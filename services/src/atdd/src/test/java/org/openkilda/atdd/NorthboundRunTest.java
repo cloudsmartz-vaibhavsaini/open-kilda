@@ -17,14 +17,20 @@ package org.openkilda.atdd;
 
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.openkilda.flow.FlowUtils.getHealthCheck;
 
 import cucumber.api.java.en.Given;
 import cucumber.api.java.en.Then;
+import net.jodah.failsafe.Failsafe;
+import net.jodah.failsafe.RetryPolicy;
+import org.openkilda.LinksUtils;
 import org.openkilda.SwitchesUtils;
 import org.openkilda.flow.FlowUtils;
 import org.openkilda.messaging.command.switches.DeleteRulesAction;
+import org.openkilda.messaging.info.event.IslChangeType;
+import org.openkilda.messaging.info.event.IslInfoData;
 import org.openkilda.messaging.info.event.PathInfoData;
 import org.openkilda.messaging.info.event.PathNode;
 import org.openkilda.messaging.payload.flow.FlowIdStatusPayload;
@@ -34,6 +40,9 @@ import org.openkilda.messaging.payload.flow.FlowState;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 public class NorthboundRunTest {
     private static final FlowState expectedFlowStatus = FlowState.UP;
@@ -42,6 +51,11 @@ public class NorthboundRunTest {
             new PathNode("de:ad:be:ef:00:00:00:04", 1, 1),
             new PathNode("de:ad:be:ef:00:00:00:04", 2, 2),
             new PathNode("de:ad:be:ef:00:00:00:05", 1, 3)));
+
+    // The retrier is used for repeating operations which depend on the system state and may change the result after delays.
+    private final RetryPolicy retryPolicy = new RetryPolicy()
+            .withDelay(2, TimeUnit.SECONDS)
+            .withMaxRetries(30);
 
     @Then("^path of flow (.*) could be read$")
     public void checkFlowPath(final String flowId) {
@@ -100,5 +114,38 @@ public class NorthboundRunTest {
         List<Long> cookies = SwitchesUtils.deleteSwitchRules(switchId, DeleteRulesAction.DROP);
         assertNotNull(cookies);
         cookies.forEach(cookie -> System.out.println(cookie));
+    }
+
+    @Given("^the link between (.*) and (.*) is healthy$")
+    public void theLinkBetweenSwitchesIsHealthy(String sourceSwitch, String destSwitch) {
+        List<IslInfoData> links = LinksUtils.dumpLinks();
+        List<IslInfoData> healthyLinks = links.stream()
+                .filter(isl -> isl.getPath().get(0).getSwitchId().equals(sourceSwitch)
+                            && isl.getPath().get(1).getSwitchId().equals(destSwitch))
+                .filter(isl -> isl.getState() == IslChangeType.DISCOVERED)
+                .collect(Collectors.toList());
+
+        //TODO: ISL healthcheck can't gurantee that link isn't affected by rules drop...
+
+        assertFalse("Link should be healthy.", healthyLinks.isEmpty());
+    }
+
+    @Then("^the link between (.*) and (.*) is unhealthy$")
+    public void theLinkBetweenSwitchesIsUnhealthy(String sourceSwitch, String destSwitch) {
+        IslInfoData failedLink = Failsafe.with(retryPolicy
+                .retryIf(Objects::isNull))
+                .get(() -> {
+                    List<IslInfoData> links = LinksUtils.dumpLinks();
+                    return links.stream()
+                            .filter(isl -> isl.getPath().get(0).getSwitchId().equals(sourceSwitch)
+                                    && isl.getPath().get(1).getSwitchId().equals(destSwitch))
+                            .filter(isl -> isl.getState() != IslChangeType.DISCOVERED)
+                            .findAny().orElse(null);
+                });
+
+        //TODO: ISL healthcheck can't gurantee that link isn't affected by rules drop...
+
+        assertNotNull("Link should be unhealthy.", failedLink);
+        assertEquals(IslChangeType.FAILED, failedLink.getState());
     }
 }

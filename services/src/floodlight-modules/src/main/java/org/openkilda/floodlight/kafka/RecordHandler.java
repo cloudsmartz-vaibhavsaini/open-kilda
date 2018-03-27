@@ -73,7 +73,6 @@ class RecordHandler implements Runnable {
         } else {
             replyToTopic = OUTPUT_FLOW_TOPIC;
         }
-        final Destination replyDestination = getDestinationForTopic(replyToTopic);
 
         try {
             CommandData data = message.getData();
@@ -82,30 +81,30 @@ class RecordHandler implements Runnable {
             } else if (data instanceof DiscoverPathCommandData) {
                 doDiscoverPathCommand(data);
             } else if (data instanceof InstallIngressFlow) {
-                doInstallIngressFlow(message, replyToTopic, replyDestination);
+                doInstallIngressFlow(message, replyToTopic);
             } else if (data instanceof InstallEgressFlow) {
-                doInstallEgressFlow(message, replyToTopic, replyDestination);
+                doInstallEgressFlow(message, replyToTopic);
             } else if (data instanceof InstallTransitFlow) {
-                doInstallTransitFlow(message, replyToTopic, replyDestination);
+                doInstallTransitFlow(message, replyToTopic);
             } else if (data instanceof InstallOneSwitchFlow) {
-                doInstallOneSwitchFlow(message, replyToTopic, replyDestination);
+                doInstallOneSwitchFlow(message, replyToTopic);
             } else if (data instanceof RemoveFlow) {
-                doDeleteFlow(message, replyToTopic, replyDestination);
+                doDeleteFlow(message, replyToTopic);
             } else if (data instanceof NetworkCommandData) {
                 doNetworkDump(message);
             } else if (data instanceof SwitchRulesDeleteRequest) {
-                doDeleteSwitchRules(message, replyToTopic, replyDestination);
+                doDeleteSwitchRules(message, replyToTopic);
             } else if (data instanceof SwitchRulesInstallRequest) {
-                doInstallSwitchRules(message, replyToTopic, replyDestination);
+                doInstallSwitchRules(message, replyToTopic);
             } else if (data instanceof ConnectModeRequest) {
-                doConnectMode(message, replyToTopic, replyDestination);
+                doConnectMode(message, replyToTopic);
             } else {
                 logger.error("unknown data type: {}", data.toString());
             }
         } catch (FlowCommandException e) {
             ErrorMessage error = new ErrorMessage(
                     e.makeErrorResponse(),
-                    System.currentTimeMillis(), message.getCorrelationId(), replyDestination);
+                    System.currentTimeMillis(), message.getCorrelationId(), getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, error);
         } catch (Exception e) {
             logger.error("Unhandled exception: {}", e);
@@ -147,7 +146,7 @@ class RecordHandler implements Runnable {
      *
      * @param message command message for flow installation
      */
-    private void doInstallIngressFlow(final CommandMessage message, String replyToTopic, Destination replyDestination)
+    private void doInstallIngressFlow(final CommandMessage message, String replyToTopic)
             throws FlowCommandException {
         InstallIngressFlow command = (InstallIngressFlow) message.getData();
         logger.debug("Creating an ingress flow: {}", command);
@@ -175,7 +174,7 @@ class RecordHandler implements Runnable {
                     command.getOutputVlanType(),
                     meterId);
 
-            message.setDestination(replyDestination);
+            message.setDestination(getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, message);
         } catch (SwitchOperationException e) {
             throw new FlowCommandException(command.getId(), ErrorType.CREATION_FAILURE, e);
@@ -187,7 +186,7 @@ class RecordHandler implements Runnable {
      *
      * @param message command message for flow installation
      */
-    private void doInstallEgressFlow(final CommandMessage message, String replyToTopic, Destination replyDestination)
+    private void doInstallEgressFlow(final CommandMessage message, String replyToTopic)
             throws FlowCommandException {
         InstallEgressFlow command = (InstallEgressFlow) message.getData();
         logger.debug("Creating an egress flow: {}", command);
@@ -203,7 +202,7 @@ class RecordHandler implements Runnable {
                     command.getOutputVlanId(),
                     command.getOutputVlanType());
 
-            message.setDestination(replyDestination);
+            message.setDestination(getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, message);
         } catch (SwitchOperationException e) {
             throw new FlowCommandException(command.getId(), ErrorType.CREATION_FAILURE, e);
@@ -215,7 +214,7 @@ class RecordHandler implements Runnable {
      *
      * @param message command message for flow installation
      */
-    private void doInstallTransitFlow(final CommandMessage message, String replyToTopic, Destination replyDestination)
+    private void doInstallTransitFlow(final CommandMessage message, String replyToTopic)
             throws FlowCommandException {
         InstallTransitFlow command = (InstallTransitFlow) message.getData();
         logger.debug("Creating a transit flow: {}", command);
@@ -229,7 +228,7 @@ class RecordHandler implements Runnable {
                     command.getOutputPort(),
                     command.getTransitVlanId());
 
-            message.setDestination(replyDestination);
+            message.setDestination(getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, message);
         } catch (SwitchOperationException e) {
             throw new FlowCommandException(command.getId(), ErrorType.CREATION_FAILURE, e);
@@ -242,7 +241,7 @@ class RecordHandler implements Runnable {
      * @param message command message for flow installation
      */
     private void doInstallOneSwitchFlow(final CommandMessage message,
-            String replyToTopic, Destination replyDestination) throws FlowCommandException {
+            String replyToTopic) throws FlowCommandException {
         InstallOneSwitchFlow command = (InstallOneSwitchFlow) message.getData();
         logger.debug("creating a flow through one switch: {}", command);
 
@@ -270,7 +269,7 @@ class RecordHandler implements Runnable {
                     directOutputVlanType,
                     meterId);
 
-            message.setDestination(replyDestination);
+            message.setDestination(getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, message);
         } catch (SwitchOperationException e) {
             throw new FlowCommandException(command.getId(), ErrorType.CREATION_FAILURE, e);
@@ -282,7 +281,7 @@ class RecordHandler implements Runnable {
      *
      * @param message command message for flow installation
      */
-    private void doDeleteFlow(final CommandMessage message, String replyToTopic, Destination replyDestination)
+    private void doDeleteFlow(final CommandMessage message, String replyToTopic)
             throws FlowCommandException {
         RemoveFlow command = (RemoveFlow) message.getData();
         logger.debug("deleting a flow: {}", command);
@@ -297,7 +296,7 @@ class RecordHandler implements Runnable {
                 switchManager.deleteMeter(dpid, meterId);
             }
 
-            message.setDestination(replyDestination);
+            message.setDestination(getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, message);
         } catch (SwitchOperationException e) {
             throw new FlowCommandException(command.getId(), ErrorType.DELETION_FAILURE, e);
@@ -337,7 +336,7 @@ class RecordHandler implements Runnable {
 
         context.getKafkaProducer().postMessage(OUTPUT_DISCO_TOPIC, infoMessage);
     }
-    private void doInstallSwitchRules(final CommandMessage message, String replyToTopic, Destination replyDestination) {
+    private void doInstallSwitchRules(final CommandMessage message, String replyToTopic) {
         SwitchRulesInstallRequest request = (SwitchRulesInstallRequest) message.getData();
         logger.debug("Installing rules on '{}' switch: action={}", request.getSwitchId(), request.getInstallRulesAction());
 
@@ -367,18 +366,18 @@ class RecordHandler implements Runnable {
 
             SwitchRulesResponse response = new SwitchRulesResponse(installedRules);
             InfoMessage infoMessage = new InfoMessage(response,
-                    System.currentTimeMillis(), message.getCorrelationId(), replyDestination);
+                    System.currentTimeMillis(), message.getCorrelationId(), getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, infoMessage);
 
         } catch (SwitchOperationException e) {
             ErrorData errorData = new ErrorData(ErrorType.CREATION_FAILURE, e.getMessage(), request.getSwitchId());
             ErrorMessage error = new ErrorMessage(errorData,
-                    System.currentTimeMillis(), message.getCorrelationId(), replyDestination);
+                    System.currentTimeMillis(), message.getCorrelationId(), getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, error);
         }
     }
 
-    private void doDeleteSwitchRules(final CommandMessage message, String replyToTopic, Destination replyDestination) {
+    private void doDeleteSwitchRules(final CommandMessage message, String replyToTopic) {
         SwitchRulesDeleteRequest request = (SwitchRulesDeleteRequest) message.getData();
         logger.debug("Deleting rules from '{}' switch: action={}", request.getSwitchId(), request.getDeleteRulesAction());
 
@@ -433,18 +432,18 @@ class RecordHandler implements Runnable {
 
             SwitchRulesResponse response = new SwitchRulesResponse(removedRules);
             InfoMessage infoMessage = new InfoMessage(response,
-                    System.currentTimeMillis(), message.getCorrelationId(), replyDestination);
+                    System.currentTimeMillis(), message.getCorrelationId(), getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, infoMessage);
 
         } catch (SwitchOperationException e) {
             ErrorData errorData = new ErrorData(ErrorType.DELETION_FAILURE, e.getMessage(), request.getSwitchId());
             ErrorMessage error = new ErrorMessage(errorData,
-                    System.currentTimeMillis(), message.getCorrelationId(), replyDestination);
+                    System.currentTimeMillis(), message.getCorrelationId(), getDestinationForTopic(replyToTopic));
             context.getKafkaProducer().postMessage(replyToTopic, error);
         }
     }
 
-    private void doConnectMode(final CommandMessage message, String replyToTopic, Destination replyDestination) {
+    private void doConnectMode(final CommandMessage message, String replyToTopic) {
         ConnectModeRequest request = (ConnectModeRequest) message.getData();
         if (request.getMode() != null)
             logger.debug("Setting CONNECT MODE to '{}'", request.getMode());
@@ -457,7 +456,7 @@ class RecordHandler implements Runnable {
         logger.debug("CONNECT MODE is now '{}'", result);
         ConnectModeResponse response = new ConnectModeResponse(result);
         InfoMessage infoMessage = new InfoMessage(response,
-                    System.currentTimeMillis(), message.getCorrelationId(), replyDestination);
+                    System.currentTimeMillis(), message.getCorrelationId(), getDestinationForTopic(replyToTopic));
         context.getKafkaProducer().postMessage(replyToTopic, infoMessage);
 
     }

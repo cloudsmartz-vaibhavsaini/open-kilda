@@ -17,6 +17,8 @@
     <url>https://bitbucket.org/openkilda/controller/wiki/Home</url>
 
     <properties>
+        <failsafe.version>1.0.5</failsafe.version>
+
         <lombok.version>1.16.20</lombok.version>
     </properties>
 
@@ -100,6 +102,11 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-collections4</artifactId>
             <version>4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.jodah</groupId>
+            <artifactId>failsafe</artifactId>
+            <version>${failsafe.version}</version>
         </dependency>
 
         <dependency>
