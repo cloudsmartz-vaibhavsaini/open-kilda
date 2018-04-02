@@ -20,6 +20,7 @@ import static org.openkilda.messaging.Utils.PAYLOAD;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.annotations.VisibleForTesting;
+import org.apache.storm.kafka.spout.internal.Timer;
 import org.apache.storm.state.KeyValueState;
 import org.apache.storm.task.OutputCollector;
 import org.apache.storm.task.TopologyContext;
@@ -55,14 +56,13 @@ import org.openkilda.wfm.isl.DummyIIslFilter;
 import org.openkilda.wfm.topology.AbstractTopology;
 import org.openkilda.wfm.topology.TopologyConfig;
 import org.openkilda.wfm.topology.utils.AbstractTickStatefulBolt;
+import org.openkilda.wfm.topology.utils.KafkaRecordTranslator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -98,6 +98,7 @@ public class OFELinkBolt
     private final int islHealthCheckTimeout;
     private final int islHealthFailureLimit;
     private final float watchDogInterval;
+    private final float dropOutdatedInputIn;
     private WatchDog watchDog;
     private boolean isOnline = true;
     private TopologyContext context;
@@ -108,14 +109,12 @@ public class OFELinkBolt
     private LinkedList<DiscoveryNode> discoveryQueue;
 
     /**
-     * Initialization flag
-     */
-    private boolean isReceivedCacheInfo = false;
-
-    /**
      * Cache request send flag
      */
-    private boolean isCacheRequestSend = false;
+    private String dumpRequestCorrelationId = null;
+    private float dumpRequestTimeout;
+    private Timer dumpRequestTimer;
+    private Long dropEverithingOlder = null;
 
     /**
      * Default constructor .. default health check frequency
@@ -128,6 +127,8 @@ public class OFELinkBolt
         this.islHealthFailureLimit = config.getDiscoveryLimit();
 
         watchDogInterval = config.getDiscoverySpeakerFailureTimeout();
+        dropOutdatedInputIn = config.getDiscoveryDropOutdatedInputIn();
+        dumpRequestTimeout = config.getDiscoveryDumpRequestTimeout();
 
         topoEngTopic = config.getKafkaTopoEngTopic();
         islDiscoveryTopic = config.getKafkaSpeakerTopic();
@@ -171,10 +172,10 @@ public class OFELinkBolt
         if (isOnline != isSpeakerAvailable) {
             if (isSpeakerAvailable) {
                 logger.warn("Switch into ONLINE mode");
-                isCacheRequestSend = false;
+                dumpRequestCorrelationId = null;
             } else {
                 logger.warn("Switch into OFFLINE mode");
-                isReceivedCacheInfo = false;
+                dropEverithingOlder = null;
             }
         }
         isOnline = isSpeakerAvailable;
@@ -183,13 +184,13 @@ public class OFELinkBolt
             return;
         }
 
-        if (!isCacheRequestSend)
+        if (dumpRequestCorrelationId != null)
         {
             // Only one message to FL needed
-            isCacheRequestSend = true;
-            sendNetworkRequest(tuple);
+            dumpRequestCorrelationId = sendNetworkRequest(tuple);
+            enableDumpRequestTimer();
         }
-        else if (isReceivedCacheInfo)
+        else if (dropEverithingOlder != null)
         {
             // On first tick(or after network outage), we send network dump request to FL,
             // and then we ignore all ticks till cache not received
@@ -210,17 +211,25 @@ public class OFELinkBolt
                 logger.error("Unable to encode message: {}", e);
             }
         }
+        else if (dumpRequestTimer.isExpiredResetOnTrue())
+        {
+            logger.error("Did not get network dump, send one more dump request");
+            sendNetworkRequest(tuple);
+        }
     }
 
     /**
      * Send network dump request to FL
      */
-    private void sendNetworkRequest(Tuple tuple) {
+    private String sendNetworkRequest(Tuple tuple) {
+        String correlationId = null;
+
         try {
             logger.debug("Send network dump request");
 
+            correlationId = UUID.randomUUID().toString();
             CommandMessage command = new CommandMessage(new NetworkCommandData(),
-                    System.currentTimeMillis(), Utils.SYSTEM_CORRELATION_ID,
+                    System.currentTimeMillis(), correlationId,
                     Destination.CONTROLLER);
             String json = Utils.MAPPER.writeValueAsString(command);
             collector.emit(islDiscoveryTopic, tuple, new Values(PAYLOAD, json));
@@ -229,6 +238,8 @@ public class OFELinkBolt
         {
             logger.error("Could not serialize network cache request", exception);
         }
+
+        return correlationId;
     }
 
     /**
@@ -258,7 +269,17 @@ public class OFELinkBolt
 //            return;
 //        }
 
-        String json = tuple.getString(0);
+        String json = tuple.getStringByField(KafkaRecordTranslator.FIELD_ID_PAYLOAD);
+        long timestamp = tuple.getLongByField(KafkaRecordTranslator.FIELD_ID_TIMESTAMP);
+
+        logger.debug("Got input message, message timestamp {} current timestamp is {}", timestamp);
+        double inputAge = calcInputMessageAge(tuple);
+        if (dropOutdatedInputIn < inputAge) {
+            logger.warn("Drop input message due to age {} (age limit {})", inputAge, dropOutdatedInputIn);
+            collector.ack(tuple);
+            return;
+        }
+
         try {
             BaseMessage bm = MAPPER.readValue(json, BaseMessage.class);
             watchDog.reset();
@@ -266,10 +287,11 @@ public class OFELinkBolt
             if (bm instanceof InfoMessage) {
                 InfoData data = ((InfoMessage)bm).getData();
                 if (data instanceof NetworkInfoData) {
-                    handleNetworkDump(tuple, (NetworkInfoData)data);
-                    isReceivedCacheInfo = true;
-                } else if (!isReceivedCacheInfo) {
+                    handleNetworkDump(tuple, (NetworkInfoData)data, ((InfoMessage)bm).getCorrelationId());
+                } else if (dropEverithingOlder == null) {
                     logger.debug("Bolt is not initialized mark tuple as fail");
+                } else if (timestamp < dropEverithingOlder) {
+                    logger.warn("Drop message because it's older that initial network dump");
                 } else if (data instanceof SwitchInfoData) {
                     handleSwitchEvent(tuple, (SwitchInfoData) data);
                     passToTopologyEngine(tuple);
@@ -291,18 +313,25 @@ public class OFELinkBolt
             logger.error("Unknown Message type={}", json);
         } finally {
             // We mark as fail all tuples while bolt is not initialized
-            if (isReceivedCacheInfo) {
+            if (dropEverithingOlder != null) {
                 collector.ack(tuple);
-            } else {
-                collector.fail(tuple);
             }
         }
     }
 
-    private void handleNetworkDump(Tuple tuple, NetworkInfoData data) {
+    private void handleNetworkDump(Tuple tuple, NetworkInfoData data, String correlationId) {
         logger.info("Start process network dump");
-        data.getSwitches().forEach( switchInfo -> handleSwitchEvent(tuple, switchInfo) );
-        data.getPorts().forEach( portInfo -> handlePortEvent(tuple, portInfo) );
+        if (dumpRequestCorrelationId == null) {
+            logger.warn("Got network dump, but we don't request it");
+        } else if (dumpRequestCorrelationId.equals(correlationId)) {
+            data.getSwitches().forEach(switchInfo -> handleSwitchEvent(tuple, switchInfo));
+            data.getPorts().forEach(portInfo -> handlePortEvent(tuple, portInfo));
+
+            dropEverithingOlder = tuple.getLongByField(KafkaRecordTranslator.FIELD_ID_TIMESTAMP);
+            dumpRequestCorrelationId = null;
+        } else {
+            logger.warn("Skip network dump response with mismatch correlation id");
+        }
         logger.info("Finish process network dump");
     }
 
@@ -414,6 +443,17 @@ public class OFELinkBolt
     private boolean isPortUpOrCached(String state) {
         return OFEMessageUtils.PORT_UP.equals(state) || OFEMessageUtils.PORT_ADD.equals(state) ||
                 PortChangeType.CACHED.getType().equals(state);
+    }
+
+    private void enableDumpRequestTimer() {
+        long expireDelay = (int) (dumpRequestTimeout * 1000);
+        dumpRequestTimer = new Timer(expireDelay, expireDelay, TimeUnit.MILLISECONDS);
+    }
+
+    private double calcInputMessageAge(Tuple tuple) {
+        long timestamp = tuple.getLongByField(KafkaRecordTranslator.FIELD_ID_TIMESTAMP);
+        long currentTime = System.currentTimeMillis();
+        return (currentTime - timestamp) / 1000.0;
     }
 
     @Override
