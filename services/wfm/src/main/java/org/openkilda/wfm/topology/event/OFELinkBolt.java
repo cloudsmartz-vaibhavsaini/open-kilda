@@ -244,8 +244,7 @@ public class OFELinkBolt
 
             if (bm instanceof InfoMessage) {
                 InfoData data = ((InfoMessage)bm).getData();
-                if (data instanceof NetworkInfoData) {
-                    handleNetworkDump(tuple, (NetworkInfoData)data);
+                if (data instanceof NetworkSyncMarker) {
                     isReceivedCacheInfo = true;
                 } else if (!isReceivedCacheInfo) {
                     logger.debug("Bolt is not initialized mark tuple as fail");
@@ -257,8 +256,6 @@ public class OFELinkBolt
                     passToTopologyEngine(tuple);
                 } else if (data instanceof IslInfoData) {
                     handleIslEvent(tuple, (IslInfoData) data);
-                } else if (data instanceof NetworkSyncMarker) {
-
                 } else {
                     logger.warn("Unknown InfoData type={}", data);
                 }
@@ -278,13 +275,6 @@ public class OFELinkBolt
                 collector.fail(tuple);
             }
         }
-    }
-
-    private void handleNetworkDump(Tuple tuple, NetworkInfoData data) {
-        logger.info("Start process network dump");
-        data.getSwitches().forEach( switchInfo -> handleSwitchEvent(tuple, switchInfo) );
-        data.getPorts().forEach( portInfo -> handlePortEvent(tuple, portInfo) );
-        logger.info("Finish process network dump");
     }
 
     private void handleSwitchEvent(Tuple tuple, SwitchInfoData switchData) {
