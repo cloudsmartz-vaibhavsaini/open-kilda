@@ -17,11 +17,13 @@ package org.openkilda.wfm.topology.flow.bolts;
 
 import static java.lang.String.format;
 import static org.openkilda.messaging.Utils.MAPPER;
+import static org.openkilda.wfm.topology.AbstractTopology.MESSAGE_FIELD;
 
 import org.openkilda.messaging.Destination;
 import org.openkilda.messaging.Message;
 import org.openkilda.messaging.Utils;
 import org.openkilda.messaging.command.CommandMessage;
+import org.openkilda.messaging.command.discovery.MarkOfflineCommandData;
 import org.openkilda.messaging.command.flow.FlowCreateRequest;
 import org.openkilda.messaging.command.flow.FlowRerouteRequest;
 import org.openkilda.messaging.command.flow.FlowRestoreRequest;
@@ -196,7 +198,7 @@ public class CrudBolt
             switch (componentId) {
 
                 case SPLITTER_BOLT:
-                    Message msg = (Message) tuple.getValueByField(AbstractTopology.MESSAGE_FIELD);
+                    Message msg = (Message) tuple.getValueByField(MESSAGE_FIELD);
                     correlationId = msg.getCorrelationId();
 
                     CommandMessage cmsg = (msg instanceof CommandMessage) ? (CommandMessage) msg : null;
@@ -269,11 +271,14 @@ public class CrudBolt
 
                 case TOPOLOGY_ENGINE_BOLT:
 
-                    ErrorMessage errorMessage = (ErrorMessage) tuple.getValueByField(AbstractTopology.MESSAGE_FIELD);
+                    ErrorMessage errorMessage = (ErrorMessage) tuple.getValueByField(MESSAGE_FIELD);
 
                     logger.info("Flow {} error: component={}, stream={}", flowId, componentId, streamId);
 
                     switch (streamId) {
+                        case CACHE_SYNC:
+                            handleTeCacheSyncPush(tuple);
+                            break;
                         case STATUS:
                             handleErrorRequest(flowId, errorMessage, tuple);
                             break;
@@ -713,6 +718,16 @@ public class CrudBolt
         logger.info("Load flows {}", flows.size());
         flows.forEach(flowCache::putFlow);
     }
+
+    private void handleTeCacheSyncPush(Tuple tuple) {
+        Object rawPayload = tuple.getValueByField(MESSAGE_FIELD);
+        if (rawPayload instanceof MarkOfflineCommandData) {
+            // TODO
+        } else {
+            logger.debug("Got unknown payload {}: {}", rawPayload.getClass().getName(), rawPayload);
+        }
+    }
+
 
     /**
      * Builds response flow.

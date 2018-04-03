@@ -22,6 +22,7 @@ import org.openkilda.messaging.Message;
 import org.openkilda.messaging.Utils;
 import org.openkilda.messaging.command.CommandData;
 import org.openkilda.messaging.command.CommandMessage;
+import org.openkilda.messaging.command.discovery.MarkOfflineCommandData;
 import org.openkilda.messaging.command.flow.BaseInstallFlow;
 import org.openkilda.messaging.command.flow.RemoveFlow;
 import org.openkilda.messaging.error.ErrorMessage;
@@ -104,7 +105,9 @@ public class TopologyEngineBolt extends BaseRichBolt {
                     message.setDestination(Destination.CONTROLLER);
                     values = new Values(MAPPER.writeValueAsString(message), switchId, flowId, transactionId);
                     outputCollector.emit(StreamType.DELETE.toString(), tuple, values);
-
+                } else if (data instanceof MarkOfflineCommandData) {
+                    logger.debug("Got mark network with \"UNKNOWN\" status request");
+                    outputCollector.emit(StreamType.CACHE_SYNC.toString(), tuple, new Values(data));
                 } else {
                     logger.debug("Skip undefined command message: {}={}, message={}",
                             Utils.CORRELATION_ID, message.getCorrelationId(), request);
@@ -149,6 +152,7 @@ public class TopologyEngineBolt extends BaseRichBolt {
         outputFieldsDeclarer.declareStream(StreamType.DELETE.toString(), FlowTopology.fieldsMessageSwitchIdFlowIdTransactionId);
         outputFieldsDeclarer.declareStream(StreamType.RESPONSE.toString(), FlowTopology.fieldMessage);
         outputFieldsDeclarer.declareStream(StreamType.STATUS.toString(), FlowTopology.fieldsMessageFlowId);
+        outputFieldsDeclarer.declareStream(StreamType.CACHE_SYNC.toString(), FlowTopology.fieldMessage);
     }
 
     /**

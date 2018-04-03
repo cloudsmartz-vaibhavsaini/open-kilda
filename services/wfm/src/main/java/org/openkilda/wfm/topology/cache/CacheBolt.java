@@ -203,7 +203,6 @@ public class CacheBolt
          */
         // TODO: Eliminate the inefficiency introduced through the hack
         try {
-            logger.info("Received cache data={}", tuple);
             BaseMessage bm = MAPPER.readValue(json, BaseMessage.class);
             if (bm instanceof InfoMessage) {
                 InfoMessage message = (InfoMessage) bm;
@@ -250,7 +249,8 @@ public class CacheBolt
             logger.error("Could not process message {}", tuple, exception);
 
         } catch (IOException exception) {
-            logger.error("Could not deserialize message {}", tuple, exception);
+            logger.error("Could not deserialize message", exception);
+            logger.error("Failed JSON tat lead to deserialization error:\n{}", json);
         } finally {
             if (isReceivedCacheInfo) {
                 outputCollector.ack(tuple);
